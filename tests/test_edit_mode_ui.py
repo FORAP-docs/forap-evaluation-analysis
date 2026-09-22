@@ -90,7 +90,7 @@ def test_global_mode_survives_routes_and_back_uses_current_mode(navigation_datab
     app.sidebar.radio(key="workspace_page").set_value("Upload & data health").run()
     assert not app.exception
     assert app.toggle(key="edit_mode").value is True
-    assert len(app.get("file_uploader")) == 1
+    assert {item.label for item in app.get("file_uploader")} == {"Database backup", "Current Google Forms export"}
     app.toggle(key="edit_mode").set_value(False).run()
     assert_view_mode(app)
     assert database_signature(db) == before

@@ -61,11 +61,26 @@ See [analysis methods](docs/analysis-methods.md) for scoring rules and interpret
 
 The app creates `data/forap_analysis.sqlite3` inside this repository folder. Imports, coding, notes, and earlier snapshots persist there. Back up the database to preserve your work. **Edit mode** controls which editing tools are visible. It is not authentication.
 
-Optional follow-up emails are stored in separate fields in the same local database and excluded from analytical views and downloads. The database is not encrypted by the app. Exported responses can still contain timestamps, background information, and identifying text. Review exports before sharing them.
+Optional follow-up emails are stored in separate fields in the same local database and excluded from analytical views and report downloads. Full database backups include them. The database is not encrypted by the app. Exported responses can still contain timestamps, background information, and identifying text. Review exports before sharing them.
 
 The supplied Git ignore rules exclude databases, private inputs, exports, logs, and local environments. Only the two synthetic/template workbooks are allowed through the spreadsheet ignore rule. No study data are needed to install or try the app. Access to the original inputs and coding decisions would be needed to reproduce the paper's numerical and qualitative results.
 
-To switch from demonstration data to a real study, stop the app and move the demonstration database to a separate backup location. Restart the app to create an empty database. Activating a new workbook alone retains older snapshots.
+## Back up or transfer a workspace
+
+Open **Upload & data health → Database backup & restore**.
+
+1. In the source installation, select **Prepare database export**, then **Download database (.sqlite3)**.
+2. In the destination installation, open the same section and enable **Edit mode**.
+3. Upload the database backup and review its validation summary and record counts.
+4. Confirm replacement and select **Import database**. The app reloads in view mode.
+
+A database backup includes all saved response snapshots, optional email addresses, working codes, code revisions, coded excerpts, highlights and reviews, themes and evidence, notes, background settings, and audit history. **Keep these files private. They are not anonymized exports.** Prepare a new export after making further changes.
+
+Import replaces the entire workspace rather than combining databases. Before replacement, the app saves the previous database under `data/backups/before_restore_*.sqlite3`. Import that recovery file through the same controls to return to the earlier workspace. Invalid or incompatible backups are rejected, and replacement runs in a transaction so failed imports leave the current workspace intact. Close other app tabs before importing. Unsaved form entries and local software settings are not part of a database backup.
+
+The importer accepts compatible FORAP SQLite backups up to 50 MB. Arbitrary SQLite files and unsupported schema versions are not accepted. See the [transfer guide](docs/database-transfer.md) for migration and verification steps.
+
+To start a new empty study without restoring a backup, stop the app and move its current database to a private backup location. Restart the app to create an empty database. Activating a new workbook alone retains older snapshots.
 
 ## Development
 

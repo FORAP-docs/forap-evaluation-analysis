@@ -13,6 +13,7 @@ from forap_analysis.charts import (
     EXPERIENCE_EXPORT_CONFIG, pjbl_experience_figure,
 )
 from forap_analysis.database import Database
+from forap_analysis.backup_ui import render_database_transfer, reset_workspace_state
 from forap_analysis.edit_mode import (
     edit_mode_enabled as state_edit_mode_enabled,
     handle_edit_mode_change,
@@ -1227,9 +1228,13 @@ def render_upload(db: Database) -> None:
         "Validate a Google Forms Excel export before activating it as the current analysis snapshot. Earlier snapshots remain in SQLite.",
     )
     st.markdown(
-        '<div class="privacy-note"><strong>Privacy default:</strong> optional follow-up emails are separated from analysis data and never appear in dashboards or exports.</div>',
+        '<div class="privacy-note"><strong>Privacy default:</strong> optional follow-up emails are separated from analysis data and never appear in dashboards or report exports. Full database backups include them.</div>',
         unsafe_allow_html=True,
     )
+    restored_message = st.session_state.pop('_database_restore_message', None)
+    if restored_message:
+        st.success(restored_message)
+    render_database_transfer(db)
     active_count = db.active_count()
     history = db.import_history()
     c1, c2, c3 = st.columns(3)
@@ -4263,10 +4268,11 @@ def render_reports(db: Database) -> None:
 
 
 def main() -> None:
+    db = get_database(schema_revision="excerpt-highlights-v1")
+    reset_workspace_state(db)
     # Restore navigation before Streamlit instantiates any keyed widgets.
     apply_pending_navigation(st.session_state)
     inject_styles()
-    db = get_database(schema_revision="excerpt-highlights-v1")
     st.sidebar.markdown(
         """
         <div class="sidebar-brand">

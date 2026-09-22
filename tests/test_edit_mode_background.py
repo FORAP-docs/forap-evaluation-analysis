@@ -56,11 +56,11 @@ def test_upload_view_keeps_history_and_metrics_without_uploader(tmp_path: Path):
     assert len(app.metric) == 3
     assert any(item.value == "Import history" for item in app.subheader)
     assert not app.get("file_uploader")
-    assert not app.button
+    assert [item.key for item in app.button] == ["prepare_database_export"]
     assert database_signature(db) == before
     app.toggle(key="edit_mode").set_value(True).run()
     assert not app.exception
-    assert len(app.get("file_uploader")) == 1
+    assert {item.label for item in app.get("file_uploader")} == {"Database backup", "Current Google Forms export"}
 
 
 def test_category_mapping_is_hidden_until_edit_mode(tmp_path: Path):
