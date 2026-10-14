@@ -24,8 +24,6 @@ _EDITOR_KEYS = frozenset({
     "edit_code_exclusion",
     "edit_codebook_label",
     "edit_codebook_description",
-    "edit_memo_title",
-    "edit_memo_content",
 })
 _HIGHLIGHT_PREFIX = (
     r"(?:code_popup|coding_all_open_text|theme|mixed|integration|all_open_text)_.+"

@@ -33,7 +33,7 @@ def test_later_cumulative_snapshot_reconciles_rows(tmp_path: Path):
     assert list(updated_labels.values()) == ["R1", "R2", "R3"]
 
 
-def test_code_theme_coding_and_audit(tmp_path: Path):
+def test_code_theme_coding(tmp_path: Path):
     database = Database(tmp_path / "test.sqlite3")
     preview = preview_workbook(workbook_bytes(), "responses.xlsx")
     database.activate_import(preview)
@@ -118,7 +118,6 @@ def test_editing_theme_name_updates_existing_theme(tmp_path: Path):
     assert themes.iloc[0]["name"] == "Refined theme"
     assert themes.iloc[0]["description"] == "Refined statement"
     assert themes.iloc[0]["status"] == "reviewed"
-    assert len(database.audit_log()) >= 3
 
 
 def test_updating_code_color_preserves_code_and_assignments(tmp_path: Path):
@@ -135,7 +134,6 @@ def test_updating_code_color_preserves_code_and_assignments(tmp_path: Path):
     coding = database.codings("suggestions").iloc[0]
     assert coding["code_id"] == code_id
     assert coding["color"] == "#198038"
-    assert "update_color" in database.audit_log()["action"].tolist()
 
 
 def test_updating_code_color_rejects_invalid_values(tmp_path: Path):
@@ -171,7 +169,6 @@ def test_background_category_mappings_are_persistent_and_removable(tmp_path: Pat
 
     database.delete_background_mapping("computing_areas", "DISTRIBUTED COMPUTING")
     assert database.background_mappings("computing_areas").empty
-    assert {"set_mapping", "remove_mapping"}.issubset(set(database.audit_log()["action"]))
 
 
 def test_background_groupings_can_be_saved_updated_and_deleted(tmp_path: Path):
@@ -220,9 +217,6 @@ def test_background_groupings_can_be_saved_updated_and_deleted(tmp_path: Path):
     database.delete_background_grouping(grouping_id)
     assert database.background_groupings("institution_type").empty
     assert database.selected_background_grouping("institution_type") is None
-    assert {"create", "update", "delete"}.issubset(
-        set(database.audit_log()["action"])
-    )
 
 
 def test_background_groupings_reject_duplicate_category_assignments(tmp_path: Path):
@@ -331,7 +325,6 @@ def test_existing_database_is_migrated_without_losing_codes(tmp_path: Path):
         }
     assert {
         "codebook_versions",
-        "code_revisions",
         "meaning_units",
         "meaning_unit_codes",
         "background_groupings",

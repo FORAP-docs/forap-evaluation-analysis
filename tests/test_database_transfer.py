@@ -10,7 +10,7 @@ from test_respondent_navigation_ui import navigation_database, database_signatur
 def test_full_workspace_round_trip_and_recovery(navigation_database, tmp_path):
     source, *_ = navigation_database
     with source.connect() as c:
-        c.execute("INSERT INTO memos(title,content,scope,created_at,updated_at) VALUES ('Private note','Preserve me','study','now','now')")
+        c.execute("INSERT INTO themes(name,description,created_at,updated_at) VALUES ('Current theme','Preserve me','now','now')")
         c.execute("UPDATE responses SET pii_json = ?", ('{"email":"synthetic@example.test"}',))
         c.execute("UPDATE imports SET is_active=0 WHERE id=1")
     before = database_signature(source)
@@ -33,10 +33,10 @@ def test_export_includes_committed_wal_without_changing_source(tmp_path):
     db = Database(tmp_path / 'wal.sqlite3')
     with sqlite3.connect(db.path) as c:
         c.execute('PRAGMA journal_mode=WAL')
-        c.execute("INSERT INTO memos(title,content,scope,created_at,updated_at) VALUES ('WAL note','Saved','study','now','now')")
+        c.execute("INSERT INTO themes(name,description,created_at,updated_at) VALUES ('WAL theme','Saved','now','now')")
         c.commit()
         assert Path(str(db.path) + '-wal').stat().st_size > 0
-        assert inspect_backup(export_database(db)).rows['memos'] == 1
+        assert inspect_backup(export_database(db)).rows['themes'] == 1
 
 
 @pytest.mark.parametrize('bad', [b'', b'not a database', b'SQLite format 3\x00' + b'broken'])
@@ -60,9 +60,9 @@ def test_changed_file_requires_new_validation(navigation_database, tmp_path):
 
 @pytest.mark.parametrize('sql', [
     'CREATE TABLE extra_table (id INTEGER)',
-    'ALTER TABLE memos ADD COLUMN unexpected TEXT',
+    'ALTER TABLE themes ADD COLUMN unexpected TEXT',
     'CREATE VIEW hidden_view AS SELECT * FROM responses',
-    "CREATE TRIGGER surprise AFTER INSERT ON memos BEGIN DELETE FROM responses; END",
+    "CREATE TRIGGER surprise AFTER INSERT ON themes BEGIN DELETE FROM responses; END",
     'PRAGMA user_version=999',
     "INSERT INTO theme_codes(theme_id,code_id) VALUES (999,999)",
 ])
@@ -71,7 +71,7 @@ def test_incompatible_or_broken_backup_rejected(tmp_path, sql):
     with sqlite3.connect(db.path) as c:
         c.execute(sql)
     with pytest.raises(BackupError):
-        inspect_backup(export_database(db))
+        inspect_backup(db.path.read_bytes())
 
 
 def test_unrelated_sqlite_file_rejected(tmp_path):

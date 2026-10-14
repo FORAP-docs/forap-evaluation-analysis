@@ -22,7 +22,8 @@ def reset_workspace_state(db: Database) -> None:
 
 def render_database_transfer(db: Database) -> None:
     with st.expander('Database backup & restore'):
-        st.write('Transfer the complete workspace between installations, including all saved snapshots, coding, themes, highlights, notes, settings, and audit history.')
+        st.write('Transfer the complete workspace between installations, including all saved questionnaire snapshots, coding, themes, highlights, and settings.')
+        st.caption('Standalone notes, change logs, and old code revisions are excluded, including when importing an older backup. Notes attached to excerpts and theme evidence are preserved.')
         st.warning('Database backups contain all stored responses and optional email addresses. Keep them private. They are not anonymized report exports.')
         if st.button('Prepare database export', key='prepare_database_export'):
             try:

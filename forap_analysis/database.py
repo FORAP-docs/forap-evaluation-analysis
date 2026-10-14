@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 import re
 import sqlite3
+from uuid import uuid4
 from typing import Any, Iterator
 
 import pandas as pd
 
+from .database_history import LEGACY_HISTORY_SQL, discard_legacy_history
 from .importer import ImportPreview
 from .schema import FIELDS
 
@@ -29,6 +31,7 @@ class Database:
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA secure_delete = ON")
         try:
             yield connection
             connection.commit()
@@ -39,6 +42,19 @@ class Database:
             connection.close()
 
     def initialize(self) -> None:
+        legacy = False
+        if self.path.exists():
+            with closing(sqlite3.connect(self.path)) as source:
+                tables = {row[0] for row in source.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
+                legacy = bool(tables.intersection(LEGACY_HISTORY_SQL))
+                if legacy:
+                    folder = self.path.parent / 'backups'
+                    folder.mkdir(parents=True, exist_ok=True)
+                    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+                    backup = folder / f'before_history_removal_{stamp}_{uuid4().hex[:8]}.sqlite3'
+                    backup.touch(mode=0o600, exist_ok=False)
+                    with closing(sqlite3.connect(backup)) as destination:
+                        source.backup(destination)
         with self.connect() as connection:
             connection.executescript(
                 """
@@ -90,21 +106,6 @@ class Database:
                     description TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     frozen_at TEXT
-                );
-                CREATE TABLE IF NOT EXISTS code_revisions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code_id INTEGER NOT NULL,
-                    codebook_version_id INTEGER,
-                    name TEXT NOT NULL,
-                    description TEXT NOT NULL DEFAULT '',
-                    inclusion_criteria TEXT NOT NULL DEFAULT '',
-                    exclusion_criteria TEXT NOT NULL DEFAULT '',
-                    domain TEXT NOT NULL DEFAULT '',
-                    code_type TEXT NOT NULL DEFAULT 'Topic',
-                    parent_id INTEGER,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY(code_id) REFERENCES codes(id),
-                    FOREIGN KEY(codebook_version_id) REFERENCES codebook_versions(id)
                 );
                 CREATE TABLE IF NOT EXISTS themes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -184,14 +185,6 @@ class Database:
                     FOREIGN KEY(theme_id) REFERENCES themes(id) ON DELETE CASCADE,
                     FOREIGN KEY(meaning_unit_id) REFERENCES meaning_units(id) ON DELETE CASCADE
                 );
-                CREATE TABLE IF NOT EXISTS memos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    scope TEXT NOT NULL DEFAULT 'study',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS background_category_mappings (
                     field_key TEXT NOT NULL,
                     source_value TEXT NOT NULL COLLATE NOCASE,
@@ -216,14 +209,6 @@ class Database:
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(grouping_id) REFERENCES background_groupings(id) ON DELETE CASCADE
                 );
-                CREATE TABLE IF NOT EXISTS audit_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    occurred_at TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    entity_type TEXT NOT NULL,
-                    entity_id TEXT,
-                    details_json TEXT NOT NULL DEFAULT '{}'
-                );
                 CREATE INDEX IF NOT EXISTS idx_responses_active ON responses(is_active);
                 CREATE INDEX IF NOT EXISTS idx_codings_question ON codings(question_key);
                 CREATE INDEX IF NOT EXISTS idx_meaning_units_question_response
@@ -242,7 +227,13 @@ class Database:
             self._ensure_column(connection, "themes", "linked_constructs_json", "TEXT NOT NULL DEFAULT '[]'")
             self._ensure_column(connection, "themes", "implication", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "themes", "contrasting_evidence", "TEXT NOT NULL DEFAULT ''")
+            connection.execute("BEGIN IMMEDIATE")
+            discard_legacy_history(connection)
+            connection.execute("PRAGMA user_version = 1")
             connection.execute("PRAGMA optimize")
+        if legacy:
+            with self.connect() as connection:
+                connection.execute("VACUUM")
 
     @staticmethod
     def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -257,11 +248,6 @@ class Database:
     def _now() -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    def _audit(self, connection: sqlite3.Connection, action: str, entity_type: str, entity_id: Any, details: dict[str, Any] | None = None) -> None:
-        connection.execute(
-            "INSERT INTO audit_log(occurred_at, action, entity_type, entity_id, details_json) VALUES (?, ?, ?, ?, ?)",
-            (self._now(), action, entity_type, str(entity_id) if entity_id is not None else None, json.dumps(details or {})),
-        )
 
     def import_exists(self, file_hash: str) -> bool:
         with self.connect() as connection:
@@ -328,7 +314,6 @@ class Database:
                     "INSERT INTO response_snapshots(import_id, response_id, row_hash, data_json, pii_json) VALUES (?, ?, ?, ?, ?)",
                     (import_id, response_id, row_hash, data_json, pii_json),
                 )
-            self._audit(connection, "activate", "import", import_id, {"filename": preview.filename, "rows": len(preview.frame)})
             return {"import_id": import_id, "inserted": inserted, "updated": updated, "unchanged": unchanged}
 
     def active_data(self) -> pd.DataFrame:
@@ -371,30 +356,15 @@ class Database:
                        updated_at=excluded.updated_at""",
                 (field_key, source_value, canonical_value, now, now),
             )
-            self._audit(
-                connection,
-                "set_mapping",
-                "background_category",
-                f"{field_key}:{source_value}",
-                {"field_key": field_key, "source_value": source_value, "canonical_value": canonical_value},
-            )
 
     def delete_background_mapping(self, field_key: str, source_value: str) -> None:
         field_key = field_key.strip()
         source_value = source_value.strip()
         with self.connect() as connection:
-            deleted = connection.execute(
+            connection.execute(
                 "DELETE FROM background_category_mappings WHERE field_key=? AND source_value=?",
                 (field_key, source_value),
-            ).rowcount
-            if deleted:
-                self._audit(
-                    connection,
-                    "remove_mapping",
-                    "background_category",
-                    f"{field_key}:{source_value}",
-                    {"field_key": field_key, "source_value": source_value},
-                )
+            )
 
     def background_groupings(self, field_key: str | None = None) -> pd.DataFrame:
         query = "SELECT * FROM background_groupings"
@@ -471,7 +441,7 @@ class Database:
                         (field_key, name, groups_json, source, now, now),
                     )
                     saved_id = int(cursor.lastrowid)
-                    action = "create"
+
                 else:
                     existing = connection.execute(
                         "SELECT id FROM background_groupings WHERE id=?", (int(grouping_id),)
@@ -485,18 +455,11 @@ class Database:
                         (field_key, name, groups_json, source, now, int(grouping_id)),
                     )
                     saved_id = int(grouping_id)
-                    action = "update"
+
             except sqlite3.IntegrityError as error:
                 raise ValueError(
                     "A saved grouping with this name already exists for this background question."
                 ) from error
-            self._audit(
-                connection,
-                action,
-                "background_grouping",
-                saved_id,
-                {"field_key": field_key, "name": name, "groups": normalized},
-            )
             return saved_id
 
     def delete_background_grouping(self, grouping_id: int) -> None:
@@ -509,13 +472,6 @@ class Database:
                 return
             connection.execute(
                 "DELETE FROM background_groupings WHERE id=?", (int(grouping_id),)
-            )
-            self._audit(
-                connection,
-                "delete",
-                "background_grouping",
-                int(grouping_id),
-                {"field_key": row["field_key"], "name": row["name"]},
             )
 
     def selected_background_grouping(self, field_key: str) -> int | None:
@@ -541,13 +497,6 @@ class Database:
                     "DELETE FROM background_grouping_selections WHERE field_key=?",
                     (field_key,),
                 )
-                self._audit(
-                    connection,
-                    "clear_selection",
-                    "background_grouping",
-                    None,
-                    {"field_key": field_key},
-                )
                 return
             grouping = connection.execute(
                 "SELECT id FROM background_groupings WHERE id=? AND field_key=?",
@@ -562,13 +511,6 @@ class Database:
                        grouping_id=excluded.grouping_id,
                        updated_at=excluded.updated_at""",
                 (field_key, int(grouping_id), self._now()),
-            )
-            self._audit(
-                connection,
-                "select",
-                "background_grouping",
-                int(grouping_id),
-                {"field_key": field_key},
             )
 
     def active_hashes(self) -> dict[str, str]:
@@ -642,7 +584,6 @@ class Database:
                 (label.strip(), status, description, now),
             )
             version_id = int(cursor.lastrowid)
-            self._audit(connection, "create", "codebook_version", version_id, {"label": label.strip()})
             return version_id
 
     def freeze_codebook_version(self, version_id: int) -> None:
@@ -651,7 +592,6 @@ class Database:
                 "UPDATE codebook_versions SET status='frozen', frozen_at=? WHERE id=?",
                 (self._now(), version_id),
             )
-            self._audit(connection, "freeze", "codebook_version", version_id)
 
     def save_code(
         self,
@@ -677,7 +617,7 @@ class Database:
                        WHERE id=?""",
                     (description, inclusion, exclusion, color, parent_id, domain, code_type, codebook_version_id, now, code_id),
                 )
-                action = "update"
+
             else:
                 cursor = connection.execute(
                     """INSERT INTO codes(name, description, inclusion_criteria, exclusion_criteria, color,
@@ -686,20 +626,12 @@ class Database:
                     (name.strip(), description, inclusion, exclusion, color, parent_id, domain, code_type, codebook_version_id, now, now),
                 )
                 code_id = int(cursor.lastrowid)
-                action = "create"
-            connection.execute(
-                """INSERT INTO code_revisions(code_id, codebook_version_id, name, description,
-                   inclusion_criteria, exclusion_criteria, domain, code_type, parent_id, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (code_id, codebook_version_id, name.strip(), description, inclusion, exclusion, domain, code_type, parent_id, now),
-            )
-            self._audit(connection, action, "code", code_id, {"name": name.strip()})
+
             return code_id
 
     def deactivate_code(self, code_id: int) -> None:
         with self.connect() as connection:
             connection.execute("UPDATE codes SET is_active=0, updated_at=? WHERE id=?", (self._now(), code_id))
-            self._audit(connection, "deactivate", "code", code_id)
 
     def update_code_color(self, code_id: int, color: str) -> None:
         normalized = color.strip().lower()
@@ -721,13 +653,6 @@ class Database:
             connection.execute(
                 "UPDATE codes SET color=?, updated_at=? WHERE id=?",
                 (normalized, self._now(), code_id),
-            )
-            self._audit(
-                connection,
-                "update_color",
-                "code",
-                code_id,
-                {"name": current["name"], "from": current["color"], "to": normalized},
             )
 
     def codings(self, question_key: str | None = None) -> pd.DataFrame:
@@ -802,7 +727,7 @@ class Database:
                         "UPDATE meaning_units SET note=?, is_pilot=?, updated_at=? WHERE id=?",
                         (note, int(is_pilot), now, unit_id),
                     )
-                    action = "update"
+
                 else:
                     cursor = connection.execute(
                         """INSERT INTO meaning_units(response_id, question_key, excerpt, note, is_pilot,
@@ -810,7 +735,7 @@ class Database:
                         (response_id, question_key, excerpt, note, int(is_pilot), now, now),
                     )
                     unit_id = int(cursor.lastrowid)
-                    action = "create"
+
             else:
                 previous = connection.execute(
                     "SELECT response_id,question_key,excerpt FROM meaning_units WHERE id=?", (unit_id,)
@@ -826,7 +751,7 @@ class Database:
                        is_pilot=?, updated_at=? WHERE id=?""",
                     (response_id, question_key, excerpt, note, int(is_pilot), now, unit_id),
                 )
-                action = "update"
+
             # Retain highlights when only the interpretation or other codes change.
             existing = {int(row[0]) for row in connection.execute(
                 "SELECT code_id FROM meaning_unit_codes WHERE meaning_unit_id=?", (unit_id,)
@@ -840,19 +765,11 @@ class Database:
                 "INSERT INTO meaning_unit_codes(meaning_unit_id, code_id, created_at) VALUES (?, ?, ?)",
                 [(unit_id, code_id, now) for code_id in sorted(selected - existing)],
             )
-            self._audit(
-                connection,
-                action,
-                "meaning_unit",
-                unit_id,
-                {"response_id": response_id, "question": question_key, "code_ids": sorted(set(code_ids)), "is_pilot": bool(is_pilot)},
-            )
             return unit_id
 
     def delete_meaning_unit(self, unit_id: int) -> None:
         with self.connect() as connection:
             connection.execute("DELETE FROM meaning_units WHERE id=?", (unit_id,))
-            self._audit(connection, "delete", "meaning_unit", unit_id)
 
     def highlight_reviews(self, meaning_unit_id: int | None = None) -> pd.DataFrame:
         """Return every assigned pair, including assignments not yet highlighted."""
@@ -945,8 +862,6 @@ class Database:
             "INSERT INTO meaning_unit_code_highlights(meaning_unit_id,code_id,start_offset,end_offset) VALUES (?,?,?,?)",
             [(meaning_unit_id, code_id, start, end) for start, end in normalized],
         )
-        self._audit(connection, "set_highlights", "meaning_unit", meaning_unit_id,
-                    {"code_id": code_id, "spans": normalized, "status": status, "note": note.strip(), "excerpt_sha256": digest})
 
     def save_code_highlights(
         self, meaning_unit_id: int, code_id: int, spans: list[tuple[int, int]], *,
@@ -979,7 +894,6 @@ class Database:
                        DO UPDATE SET excerpt=excluded.excerpt, note=excluded.note, updated_at=excluded.updated_at""",
                     (response_id, question_key, code_id, excerpt, note, now, now),
                 )
-            self._audit(connection, "set_codes", "response", response_id, {"question": question_key, "code_ids": sorted(selected)})
 
     def themes(self) -> pd.DataFrame:
         with self.connect() as connection:
@@ -1043,7 +957,7 @@ class Database:
                        contrasting_evidence=?, updated_at=? WHERE id=?""",
                     (name.strip(), description, status, constructs_json, implication, contrasting_evidence, now, saved_theme_id),
                 )
-                action = "update"
+
             else:
                 cursor = connection.execute(
                     """INSERT INTO themes(name, description, status, linked_constructs_json, implication,
@@ -1051,30 +965,17 @@ class Database:
                     (name.strip(), description, status, constructs_json, implication, contrasting_evidence, now, now),
                 )
                 saved_theme_id = int(cursor.lastrowid)
-                action = "create"
+
             connection.execute("DELETE FROM theme_codes WHERE theme_id=?", (saved_theme_id,))
             connection.executemany(
                 "INSERT INTO theme_codes(theme_id, code_id) VALUES (?, ?)",
                 [(saved_theme_id, code_id) for code_id in code_ids],
-            )
-            self._audit(
-                connection,
-                action,
-                "theme",
-                saved_theme_id,
-                {
-                    "name": name.strip(),
-                    "code_ids": code_ids,
-                    "status": status,
-                    "linked_constructs": linked_constructs or [],
-                },
             )
             return saved_theme_id
 
     def delete_theme(self, theme_id: int) -> None:
         with self.connect() as connection:
             connection.execute("DELETE FROM themes WHERE id=?", (theme_id,))
-            self._audit(connection, "delete", "theme", theme_id)
 
     def theme_evidence(self, theme_id: int | None = None) -> pd.DataFrame:
         query = """SELECT te.theme_id, t.name AS theme_name, te.meaning_unit_id, te.evidence_role,
@@ -1113,30 +1014,12 @@ class Database:
                    is_representative=excluded.is_representative, updated_at=excluded.updated_at""",
                 (theme_id, meaning_unit_id, evidence_role, note, int(is_representative), now, now),
             )
-            self._audit(
-                connection,
-                "set_evidence",
-                "theme",
-                theme_id,
-                {
-                    "meaning_unit_id": meaning_unit_id,
-                    "evidence_role": evidence_role,
-                    "is_representative": bool(is_representative),
-                },
-            )
 
     def delete_theme_evidence(self, theme_id: int, meaning_unit_id: int) -> None:
         with self.connect() as connection:
             connection.execute(
                 "DELETE FROM theme_evidence WHERE theme_id=? AND meaning_unit_id=?",
                 (theme_id, meaning_unit_id),
-            )
-            self._audit(
-                connection,
-                "remove_evidence",
-                "theme",
-                theme_id,
-                {"meaning_unit_id": meaning_unit_id},
             )
 
     def reset_qualitative_analysis(self) -> dict[str, int]:
@@ -1148,7 +1031,6 @@ class Database:
             "legacy_codings": "codings",
             "themes": "themes",
             "theme_evidence": "theme_evidence",
-            "qualitative_memos": "memos",
         }
         with self.connect() as connection:
             counts = {
@@ -1161,43 +1043,12 @@ class Database:
             connection.execute("DELETE FROM meaning_unit_codes")
             connection.execute("DELETE FROM meaning_units")
             connection.execute("DELETE FROM codings")
-            connection.execute("DELETE FROM code_revisions")
             connection.execute("DELETE FROM codes")
             connection.execute("DELETE FROM codebook_versions")
             connection.execute(
-                "DELETE FROM memos WHERE scope IN ('qualitative', 'rating-linked', 'theme development', 'integration', 'decision')"
-            )
-            connection.execute(
-                """DELETE FROM audit_log
-                   WHERE entity_type IN ('code', 'codebook_version', 'meaning_unit', 'theme', 'memo')
-                      OR action='set_codes'"""
-            )
-            connection.execute(
                 """DELETE FROM sqlite_sequence
-                   WHERE name IN ('codes', 'codebook_versions', 'code_revisions', 'meaning_units',
-                                  'codings', 'themes', 'memos')"""
+                   WHERE name IN ('codes', 'codebook_versions', 'meaning_units',
+                                  'codings', 'themes')"""
             )
-            self._audit(connection, "reset", "qualitative_workspace", None, counts)
             connection.execute("PRAGMA optimize")
         return counts
-
-    def memos(self) -> pd.DataFrame:
-        with self.connect() as connection:
-            rows = connection.execute("SELECT * FROM memos ORDER BY updated_at DESC").fetchall()
-        return pd.DataFrame([dict(row) for row in rows])
-
-    def save_memo(self, title: str, content: str, scope: str = "study") -> int:
-        now = self._now()
-        with self.connect() as connection:
-            cursor = connection.execute(
-                "INSERT INTO memos(title, content, scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (title.strip(), content, scope, now, now),
-            )
-            memo_id = int(cursor.lastrowid)
-            self._audit(connection, "create", "memo", memo_id, {"title": title.strip()})
-            return memo_id
-
-    def audit_log(self) -> pd.DataFrame:
-        with self.connect() as connection:
-            rows = connection.execute("SELECT * FROM audit_log ORDER BY id DESC").fetchall()
-        return pd.DataFrame([dict(row) for row in rows])

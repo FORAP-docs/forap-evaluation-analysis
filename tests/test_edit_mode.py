@@ -31,8 +31,6 @@ def test_off_on_restores_declared_forms_after_widget_cleanup():
         "edit_code_exclusion": "Exclude unrelated points.",
         "edit_codebook_label": "Next version",
         "edit_codebook_description": "A working version.",
-        "edit_memo_title": "Review note",
-        "edit_memo_content": "Check this excerpt.",
         "edit_theme_new_name": "A new theme",
         "edit_theme_new_description": "A draft account.",
         "edit_theme_12_status": "candidate",
@@ -199,13 +197,13 @@ def test_restoration_rechecks_allowlist_and_does_not_replay_poisoned_stash():
 
 
 def test_repeated_disable_preserves_hidden_drafts_but_consumed_stash_does_not_revive_cancelled_editor():
-    state = {"active_meaning_unit_editor": "all_open_text:unit:370", "edit_memo_content": "Draft"}
+    state = {"active_meaning_unit_editor": "all_open_text:unit:370", "edit_code_description": "Draft"}
     toggle(state, False)
     state.pop("active_meaning_unit_editor")
-    state.pop("edit_memo_content")
+    state.pop("edit_code_description")
     toggle(state, False)
     toggle(state, True)
-    assert state["edit_memo_content"] == "Draft"
+    assert state["edit_code_description"] == "Draft"
     state.pop("active_meaning_unit_editor")  # Cancelled while editing is enabled.
     toggle(state, False)
     toggle(state, True)

@@ -17,7 +17,7 @@ MUTATION_BUTTONS = {
     "Add passage", "Remove selected passages", "Reset passage selection", "Save highlights",
     "Create working codes", "Save working code", "Deactivate code",
     "Add theme", "Edit theme", "Save theme", "Attach evidence", "Remove evidence",
-    "Save note", "Save mapping", "Activate validated snapshot",
+    "Save mapping", "Activate validated snapshot",
 }
 EDITOR_EXPANDERS = {
     "Edit highlighted passages", "Add a working code", "Stop using a code", "Attach evidence",
@@ -32,6 +32,7 @@ def assert_view_mode(app):
     assert not (EDITOR_EXPANDERS & {expander.label for expander in app.expander})
     assert not any(toggle.label == "Representative quotation" for toggle in app.toggle)
     assert not app.color_picker
+    assert all(tab.label != "Notes & history" for tab in app.tabs)
     assert not app.get("file_uploader")
 
 
@@ -62,7 +63,7 @@ def test_thematic_defaults_to_compact_read_only_and_toggle_restores_editors(navi
     app.toggle(key="edit_mode").set_value(True).run()
     assert not app.exception
     buttons = {button.label for button in app.button}
-    assert {"Edit", "Delete", "Add coded excerpt", "Save highlights", "Save working code", "Deactivate code", "Add theme", "Edit theme", "Save note"} <= buttons
+    assert {"Edit", "Delete", "Add coded excerpt", "Save highlights", "Save working code", "Deactivate code", "Add theme", "Edit theme"} <= buttons
     assert app.toggle(key=f"theme_evidence_representative_{themes[0]}_{units[0]}")
     code_table = next(table.value for table in app.dataframe if "Working code" in table.value.columns)
     assert "Color" in code_table.columns
@@ -138,7 +139,7 @@ def test_enabled_mode_can_save_an_excerpt_and_read_only_displays_the_saved_resul
     assert database_signature(db) == saved
 
 
-def test_toggling_preserves_unsaved_excerpt_highlight_and_note_inputs(navigation_database):
+def test_toggling_preserves_unsaved_excerpt_and_highlight_inputs(navigation_database):
     from forap_analysis.highlights import excerpt_digest
 
     db, _, codes, units, _ = navigation_database
@@ -150,8 +151,6 @@ def test_toggling_preserves_unsaved_excerpt_highlight_and_note_inputs(navigation
     interpretation.set_value("Unsaved interpretation.").run()
     phrase_key = f"coding_all_open_text_{units[0]}_{codes[0]}_{excerpt_digest('Example')[:16]}_phrase"
     app.text_area(key=phrase_key).set_value("Exam").run()
-    app.text_input(key="edit_memo_title").set_value("Unsaved note title").run()
-    app.text_area(key="edit_memo_content").set_value("Unsaved note content.").run()
     app.toggle(key="edit_mode").set_value(False).run()
     assert_view_mode(app)
     assert not app.text_area
@@ -160,8 +159,6 @@ def test_toggling_preserves_unsaved_excerpt_highlight_and_note_inputs(navigation
     assert not app.exception
     assert app.text_area(key=interpretation_key).value == "Unsaved interpretation."
     assert app.text_area(key=phrase_key).value == "Exam"
-    assert app.text_input(key="edit_memo_title").value == "Unsaved note title"
-    assert app.text_area(key="edit_memo_content").value == "Unsaved note content."
     assert database_signature(db) == before
 
 

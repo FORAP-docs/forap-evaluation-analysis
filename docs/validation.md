@@ -1,5 +1,28 @@
 # Release validation
 
+## Anonymous review snapshot, 14 October 2026
+
+This snapshot includes the current supplementary-export features and later interface and database compatibility changes. Application code is copied from the current working version, including changes not yet published to the source repository.
+
+- All 207 tests passed in a separate copy of this package on macOS using the existing Python 3.13 environment and installed dependencies. Five NumPy warnings arose from constant-rating fixtures in existing interface tests.
+- The supplied synthetic workbook imported 12 fictional respondents with all 33 rating items. All seven construct scores were available, and all eight workspaces opened in Streamlit's application tests. No study codes or themes were loaded.
+- A separate end-to-end synthetic check prepared all 13 supplementary export files, verified the ZIP against the separate downloads, confirmed the default raw-p setting, and verified that export preparation left the temporary database unchanged.
+- The app opened in the in-app browser on localhost with the synthetic data. The overview and updated supplementary-export controls displayed correctly.
+- A wheel built successfully with setuptools 84.0.0 and installed into an isolated target directory. Imports resolved from that installation. Dependencies were reused from the existing environment rather than downloaded into a fresh environment.
+- The release archive contains source, documentation, tests, a blank template, and synthetic examples only. Test databases, study responses, contact information, private backups, logs, runtime environments, and Git history are excluded. Local documentation links were checked.
+
+The synthetic workbook is an interface demonstration, not a statistically realistic study sample. Its patterned ratings can produce constant construct scores and negative or undefined reliability estimates. These are not the paper's results. Windows and Linux execution were not tested in this check.
+
+## Version 0.3.0
+
+Validated on 22 September 2026 in the same macOS environment.
+
+- All 195 tests passed, including migration, export, and import of older workspaces containing standalone notes and change logs.
+- Legacy standalone notes, audit logs, and code revisions are removed, and unused prior codebook metadata is discarded. Tests confirm deleted marker text is absent from the cleaned SQLite file.
+- Questionnaire uploads and response snapshots remain intact. Current responses, codes, excerpts, assignments, highlights, reviews, themes, evidence, and background settings were verified unchanged during local migration.
+- Opening an older workspace saves a recovery copy before cleanup. Old uploaded backup files remain unchanged, and their private staging copies are cleaned before import.
+- The Notes & history tab and standalone note editor have been removed. Analysis progress remains available.
+
 ## Version 0.2.0
 
 Validated on 22 September 2026 in the local macOS environment described below.

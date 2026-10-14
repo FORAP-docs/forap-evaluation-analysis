@@ -14,7 +14,9 @@ Two-group comparisons use Welch t-tests and report Hedges' g. Comparisons with t
 
 Multi-select categories are examined as selected versus not selected. Ordered experience measures use Spearman correlations. Mixed-method comparisons contrast respondents with linked coded feedback against other respondents. Absence of linked feedback does not establish absence of that view.
 
-Tests across separate outcomes and background categories are exploratory and are not adjusted as one multiple-testing family. Tukey comparisons have their own within-analysis adjustment. Report group sizes, distributions, assumptions, uncertainty, and effect sizes alongside p-values. Internal consistency does not establish that a construct is unidimensional.
+Tests across separate outcomes and background categories are exploratory. The existing comparison views report raw p-values. Supplementary exports can optionally add Holm-adjusted p-values as a retrospective sensitivity analysis, either across all standard background tests together or separately for item and construct outcomes. The family is fixed before preview filtering and includes every finite main-test p-value in the selected definition. Non-estimable candidates remain in the export but do not enter the adjustment. Custom groupings, mixed-method tests, and assumption checks are outside these families. Tukey comparisons have their own within-analysis adjustment and are never fed into Holm. Report group sizes, distributions, assumptions, uncertainty, and effect sizes alongside p-values. Internal consistency does not establish that a construct is unidimensional.
+
+The complete export includes every computed Tukey pair, alongside the omnibus raw p-value and a flag indicating whether it is below .05. This differs from the selected pairwise display in the comparison views. Welch mean-difference intervals and degrees of freedom are calculated from the same eligible groups as the existing test. These intervals do not describe uncertainty in Hedges' g.
 
 ## Qualitative work
 

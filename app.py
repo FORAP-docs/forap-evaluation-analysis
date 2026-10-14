@@ -12,6 +12,11 @@ from forap_analysis.charts import (
     SCORE_COLORS, SCALE_LABELS, divergent_likert_figure,
     EXPERIENCE_EXPORT_CONFIG, pjbl_experience_figure,
 )
+from forap_analysis.comparisons import (
+    background_analysis_specs, observed_background_categories, run_background_analysis,
+)
+from forap_analysis.export_ui import render_supplement_exports
+from forap_analysis.exports import active_codebook, rating_distributions, response_coverage
 from forap_analysis.database import Database
 from forap_analysis.backup_ui import render_database_transfer, reset_workspace_state
 from forap_analysis.edit_mode import (
@@ -1700,15 +1705,6 @@ def background_display_label(field: object) -> str:
     }.get(field.key, field.label)
 
 
-def observed_background_categories(frame: pd.DataFrame, field: object) -> pd.Series:
-    values = frame[field.key].dropna()
-    if field.kind == "multi":
-        values = values.map(split_multi).explode().dropna()
-    values = values.astype(str).str.strip()
-    values = values[values.ne("")]
-    return values.value_counts()
-
-
 def render_background_frequency_panel(
     frame: pd.DataFrame,
     field: object,
@@ -2307,66 +2303,6 @@ def render_custom_group_builder(
             except ValueError as error:
                 st.error(str(error))
     return assignments["group"]
-
-
-def background_analysis_specs(
-    frame: pd.DataFrame,
-    selected_field: object | None = None,
-) -> list[dict[str, object]]:
-    specs: list[dict[str, object]] = []
-    fields = [selected_field] if selected_field is not None else BACKGROUND_FIELDS
-    for field in fields:
-        if field.kind == "multi":
-            for category in observed_background_categories(frame, field).index.astype(str):
-                if normalize_text(category) in NOT_APPLICABLE_VALUES:
-                    continue
-                specs.append(
-                    {
-                        "field": field,
-                        "analysis_type": "multi",
-                        "category": category,
-                        "label": f"{field.label}: {category}",
-                    }
-                )
-        elif field.kind == "ordinal":
-            specs.append(
-                {
-                    "field": field,
-                    "analysis_type": "ordinal",
-                    "category": None,
-                    "label": field.label,
-                }
-            )
-        else:
-            specs.append(
-                {
-                    "field": field,
-                    "analysis_type": "nominal",
-                    "category": None,
-                    "label": field.label,
-                }
-            )
-    return specs
-
-
-def run_background_analysis(
-    frame: pd.DataFrame,
-    field: object,
-    outcome: str,
-    analysis_type: str,
-    category: str | None,
-) -> dict[str, object]:
-    if analysis_type == "ordinal":
-        return ordinal_correlation(frame, field.key, outcome)
-    if analysis_type == "multi" and category is not None:
-        return multi_select_comparison(frame, field.key, category, outcome)
-    analysis_frame = frame.copy()
-    analysis_frame[field.key] = analysis_frame[field.key].map(
-        lambda value: pd.NA
-        if pd.notna(value) and normalize_text(value) in NOT_APPLICABLE_VALUES
-        else value
-    )
-    return group_comparison(analysis_frame, field.key, outcome)
 
 
 def background_group_counts(
@@ -3749,39 +3685,6 @@ def render_integration_reporting(db: Database, frame: pd.DataFrame) -> None:
                 render_rating_context(respondent.iloc[0], str(item["question_key"]))
 
 
-def render_memos_workspace(db: Database) -> None:
-    st.markdown("### Analysis notes")
-    st.caption("Use notes to record decisions, early patterns, questions, and reflections as the analysis develops.")
-    if edit_mode_enabled():
-        with st.form("memo_form", clear_on_submit=True):
-            memo_title = st.text_input("Note title", key="edit_memo_title")
-            memo_content = st.text_area("Note", height=180, key="edit_memo_content")
-            if st.form_submit_button("Save note", type="primary"):
-                if memo_title.strip() and memo_content.strip():
-                    db.save_memo(memo_title, memo_content, "qualitative")
-                    st.rerun()
-                else:
-                    st.error("A title and note are required.")
-    memos = db.memos()
-    if not memos.empty:
-        st.subheader("Saved notes")
-        for _, memo in memos.iterrows():
-            with st.container(border=True):
-                st.markdown(f"#### {memo['title']}")
-                st.caption(str(memo["updated_at"]))
-                st.write(memo["content"])
-    with st.expander("View detailed change history"):
-        audit = db.audit_log()
-        audit_display = audit.drop(columns=["details_json"], errors="ignore").copy()
-        if {"entity_type", "entity_id"}.issubset(audit_display.columns):
-            labels = database_respondent_labels(db)
-            response_rows = audit_display["entity_type"].eq("response")
-            audit_display.loc[response_rows, "entity_id"] = audit_display.loc[response_rows, "entity_id"].map(
-                lambda value: respondent_label(value, labels)
-            )
-        st.dataframe(audit_display, width="stretch", hide_index=True)
-
-
 def render_thematic(db: Database) -> None:
     page_header(
         "Thematic analysis",
@@ -3790,8 +3693,10 @@ def render_thematic(db: Database) -> None:
     frame = require_data(db)
     if frame is None:
         return
-    review_tab, codebook_tab, themes_tab, notes_tab = st.tabs(
-        ["Review responses", "Working codes", "Build themes", "Notes & history"],
+    if st.session_state.get("thematic_tab") == "Notes & history":
+        st.session_state["thematic_tab"] = "Review responses"
+    review_tab, codebook_tab, themes_tab = st.tabs(
+        ["Review responses", "Working codes", "Build themes"],
         key="thematic_tab",
         on_change="rerun",
     )
@@ -3801,25 +3706,24 @@ def render_thematic(db: Database) -> None:
         render_codebook_workspace(db)
     with themes_tab:
         render_theme_development(db, frame)
-    with notes_tab:
-        with st.expander("View analysis progress"):
-            inventory = corpus_inventory(frame, db)
-            totals = role_totals(frame)
-            units = db.meaning_units()
-            themes = db.themes()
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Open-ended questions", len(OPEN_TEXT_FIELDS))
-            m2.metric("Answers received", int(inventory["Non-empty responses"].sum()))
-            m3.metric("Respondents with coded excerpts", int(units["response_id"].nunique()) if not units.empty else 0)
-            m4.metric("Themes", len(themes))
-            r1, r2 = st.columns(2)
-            r1.metric("Respondents with rating explanations", totals["rating_linked_respondents"])
-            r2.metric("Respondents with overall feedback", totals["overall_feedback_respondents"])
-            inventory_display = inventory.copy()
-            inventory_display["Coverage"] = inventory_display["Coverage"].map(lambda value: f"{value:.0%}")
-            st.dataframe(inventory_display, width="stretch", hide_index=True, height=38 + 35 * len(inventory_display))
-            st.caption("Respondent counts describe coverage. Coded-excerpt counts describe the analysis work.")
-        render_memos_workspace(db)
+
+    with st.expander("View analysis progress"):
+        inventory = corpus_inventory(frame, db)
+        totals = role_totals(frame)
+        units = db.meaning_units()
+        themes = db.themes()
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Open-ended questions", len(OPEN_TEXT_FIELDS))
+        m2.metric("Answers received", int(inventory["Non-empty responses"].sum()))
+        m3.metric("Respondents with coded excerpts", int(units["response_id"].nunique()) if not units.empty else 0)
+        m4.metric("Themes", len(themes))
+        r1, r2 = st.columns(2)
+        r1.metric("Respondents with rating explanations", totals["rating_linked_respondents"])
+        r2.metric("Respondents with overall feedback", totals["overall_feedback_respondents"])
+        inventory_display = inventory.copy()
+        inventory_display["Coverage"] = inventory_display["Coverage"].map(lambda value: f"{value:.0%}")
+        st.dataframe(inventory_display, width="stretch", hide_index=True, height=38 + 35 * len(inventory_display))
+        st.caption("Respondent counts describe coverage. Coded-excerpt counts describe the analysis work.")
 
 
 def mixed_methods_catalog(frame: pd.DataFrame, included: set[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -3921,14 +3825,9 @@ def render_mixed_methods(db: Database) -> None:
         )
         selected = theme_index.loc[selected_id]
         lens_name = str(selected["name"])
-        theme_codings = db.theme_codings()
-        linked_codings = (
-            theme_codings[theme_codings["theme_id"] == selected_id]
-            if not theme_codings.empty
-            else pd.DataFrame()
-        )
-        included = set(linked_codings["response_id"].astype(str)) if not linked_codings.empty else set()
         excerpts = db.theme_evidence(int(selected_id))
+        # A shared code can cover passages deliberately excluded from this theme.
+        included = set(excerpts["response_id"].astype(str)) if not excerpts.empty else set()
         with controls.expander("Theme details"):
             st.write(str(selected["description"]) or "No description recorded.")
             if str(selected["implication"]).strip():
@@ -3936,7 +3835,10 @@ def render_mixed_methods(db: Database) -> None:
                 st.write(str(selected["implication"]))
 
     controls.metric("Linked respondents", len(included))
-    controls.caption(f"{len(included)} of {len(frame)} responses contain coded feedback linked to this selection.")
+    if mode == "Theme":
+        controls.caption(f"{len(included)} of {len(frame)} respondents have evidence selected for this theme.")
+    else:
+        controls.caption(f"{len(included)} of {len(frame)} responses contain coded feedback linked to this selection.")
 
     catalog, comparison_frame = mixed_methods_catalog(frame, included)
     display = catalog.copy()
@@ -4087,7 +3989,9 @@ def render_mixed_methods(db: Database) -> None:
                     render_compact_evidence(evidence_rows)
 
     controls.caption(
-        "Other respondents means no linked coded feedback was identified; it does not prove that the view was absent."
+        "Other respondents means no evidence was selected for this theme. It does not prove that the view was absent."
+        if mode == "Theme"
+        else "Other respondents means no linked coded feedback was identified. It does not prove that the view was absent."
     )
 
 
@@ -4173,6 +4077,16 @@ def render_reports(db: Database) -> None:
             "forap_item_statistics.csv",
             "Descriptive statistics and confidence intervals for questionnaire items.",
         ),
+        "Data · Full rating distributions": (
+            rating_distributions(frame),
+            "forap_rating_distributions.csv",
+            "All five options for all 33 items, with scale labels, valid N, missing N, and percentages.",
+        ),
+        "Data · Written-response coverage": (
+            response_coverage(frame),
+            "forap_written_response_coverage.csv",
+            "Nonblank response counts for each open-ended question. Percentages use all respondents.",
+        ),
         "Data · Construct scores": (
             score_export,
             "forap_construct_scores.csv",
@@ -4182,6 +4096,11 @@ def render_reports(db: Database) -> None:
             codes,
             "forap_working_codes.csv",
             "The working-code definitions and settings.",
+        ),
+        "Qualitative · Active codebook": (
+            active_codebook(codes, themes),
+            "forap_active_codebook.csv",
+            "Active code definitions, inclusion and exclusion criteria, and theme uses. Active does not mean finalized.",
         ),
         "Qualitative · Coded excerpts": (
             unit_export,
@@ -4265,6 +4184,9 @@ def render_reports(db: Database) -> None:
                     hide_index=True,
                     height=38 + 35 * len(thematic_summary),
                 )
+
+
+    render_supplement_exports(db, frame)
 
 
 def main() -> None:

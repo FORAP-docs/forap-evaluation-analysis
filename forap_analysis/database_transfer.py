@@ -13,6 +13,7 @@ import threading
 from uuid import uuid4
 
 from .database import Database
+from .database_history import LEGACY_HISTORY_SQL, discard_legacy_history
 
 MAX_BACKUP_BYTES = 50 * 1024 * 1024
 _REVISIONS: dict[str, int] = {}
@@ -59,10 +60,14 @@ def _schema(connection: sqlite3.Connection) -> dict:
     return result
 
 
-@lru_cache(maxsize=1)
-def _expected_schema() -> dict:
+@lru_cache(maxsize=2)
+def _expected_schema(legacy: bool = False) -> dict:
     with tempfile.TemporaryDirectory(prefix='forap-schema-') as folder:
         reference = Database(Path(folder) / 'reference.sqlite3')
+        if legacy:
+            with reference.connect() as connection:
+                for sql in LEGACY_HISTORY_SQL.values():
+                    connection.execute(sql)
         with closing(_readonly(reference.path)) as connection:
             return _schema(connection)
 
@@ -70,9 +75,9 @@ def _expected_schema() -> dict:
 def _validate(connection: sqlite3.Connection) -> tuple[dict[str, int], int]:
     if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
         raise BackupError('The database failed its SQLite integrity check.')
-    if connection.execute('PRAGMA user_version').fetchone()[0] != 0:
+    if connection.execute('PRAGMA user_version').fetchone()[0] not in (0, 1):
         raise BackupError('This database uses an unsupported schema version.')
-    if _schema(connection) != _expected_schema():
+    if _schema(connection) not in (_expected_schema(), _expected_schema(legacy=True)):
         raise BackupError('This is not a compatible FORAP workspace. Export a backup from the current app.')
     if connection.execute('PRAGMA foreign_key_check').fetchone() is not None:
         raise BackupError('The database contains broken record relationships.')
@@ -84,6 +89,21 @@ def _validate(connection: sqlite3.Connection) -> tuple[dict[str, int], int]:
     return rows, active
 
 
+
+def _prepare_backup(path: Path) -> tuple[dict[str, int], int]:
+    # Validate before modifying a private staging copy of the supplied file.
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute('PRAGMA trusted_schema = OFF')
+        connection.execute('PRAGMA foreign_keys = ON')
+        connection.execute('PRAGMA secure_delete = ON')
+        _validate(connection)
+        discard_legacy_history(connection)
+        connection.execute('PRAGMA user_version = 1')
+        connection.commit()
+        connection.execute('VACUUM')
+        return _validate(connection)
+
+
 def _save_snapshot(path: Path, target: Path) -> None:
     # The backup API includes committed WAL pages, unlike copying the main file.
     target.touch(mode=0o600, exist_ok=False)
@@ -92,11 +112,12 @@ def _save_snapshot(path: Path, target: Path) -> None:
 
 
 def export_database(db: Database) -> bytes:
-    """Return a self-contained SQLite backup, including private and inactive data."""
+    """Return a self-contained SQLite backup, including upload snapshots but excluding standalone notes and change logs."""
     try:
         with tempfile.TemporaryDirectory(prefix='forap-export-') as folder:
             target = Path(folder) / 'workspace.sqlite3'
             _save_snapshot(db.path, target)
+            _prepare_backup(target)
             return target.read_bytes()
     except sqlite3.Error as error:
         raise BackupError('The database could not be exported. Try again after other database activity finishes.') from error
@@ -117,8 +138,7 @@ def inspect_backup(data: bytes) -> BackupSummary:
         with tempfile.TemporaryDirectory(prefix='forap-inspect-') as folder:
             candidate = Path(folder) / 'candidate.sqlite3'
             _write_upload(data, candidate)
-            with closing(_readonly(candidate)) as connection:
-                rows, active = _validate(connection)
+            rows, active = _prepare_backup(candidate)
         return BackupSummary(hashlib.sha256(data).hexdigest(), rows, active)
     except sqlite3.Error as error:
         raise BackupError('The file is damaged or is not a readable FORAP database backup.') from error
@@ -140,6 +160,7 @@ def restore_database(db: Database, data: bytes, *, expected_sha256: str) -> Path
     with _TRANSFER_LOCK, tempfile.TemporaryDirectory(prefix='forap-restore-') as folder:
         candidate = Path(folder) / 'candidate.sqlite3'
         _write_upload(data, candidate)
+        _prepare_backup(candidate)
         try:
             with db.connect() as target:
                 target.execute('PRAGMA trusted_schema = OFF')

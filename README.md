@@ -51,15 +51,26 @@ This app implements a specific questionnaire. Using another instrument requires 
 - Item distributions, descriptive statistics, confidence intervals, and construct scores.
 - Cronbach's alpha and corrected item-total correlations.
 - Background comparisons using Welch t-tests, one-way ANOVA with Tukey follow-up comparisons, and Spearman correlations.
-- Working codes, exact excerpts, passage highlights, themes, analytic notes, and an audit log.
+- Working codes, exact excerpts, passage highlights, and themes.
 - Mixed-method displays connecting coded evidence and ratings.
 - CSV and Markdown exports for further analysis and reporting.
+- Complete comparison and rating-distribution exports, optional Holm sensitivity analysis, and separate supplementary files with a README, available individually or as a ZIP.
 
 See [analysis methods](docs/analysis-methods.md) for scoring rules and interpretation limits.
 
+### Prepare supplementary files
+
+Open **Reports & exports → Supplementary exports**. Choose whether to add Holm-adjusted p-values and whether the family includes all main tests together or separates item and construct tests. Leave the adjustment set to **None** to export raw results only. Optionally select specific theme-evidence rows for an interpretation worksheet, then select **Prepare export files**.
+
+Download each CSV, the README, and the JSON manifest individually, or download them together as a ZIP. These are separate editable files, not a PDF. The package uses the current data and category mappings, so it is not a record of which analyses were performed historically. Existing response-level and working-code exports remain available separately.
+
+See [export contents and settings](docs/supplementary-exports.md) for the file list, comparison families, and interpretation worksheet. Preparing an export does not change the database or publish anything.
+
 ## Local storage and data sharing
 
-The app creates `data/forap_analysis.sqlite3` inside this repository folder. Imports, coding, notes, and earlier snapshots persist there. Back up the database to preserve your work. **Edit mode** controls which editing tools are visible. It is not authentication.
+The app creates `data/forap_analysis.sqlite3` inside this repository folder. Imports, coding, and earlier snapshots persist there. Back up the database to preserve your work. **Edit mode** controls which editing tools are visible. It is not authentication.
+
+The app does not store standalone notes, change logs, or previous code revisions. Opening an older workspace removes these records after saving a private recovery copy under `data/backups/before_history_removal_*.sqlite3`. Unused prior codebook metadata is also removed. Questionnaire upload snapshots, current analysis records, and notes attached to excerpts, highlights, and theme evidence are preserved. Older recovery files still contain their original contents.
 
 Optional follow-up emails are stored in separate fields in the same local database and excluded from analytical views and report downloads. Full database backups include them. The database is not encrypted by the app. Exported responses can still contain timestamps, background information, and identifying text. Review exports before sharing them.
 
@@ -74,7 +85,7 @@ Open **Upload & data health → Database backup & restore**.
 3. Upload the database backup and review its validation summary and record counts.
 4. Confirm replacement and select **Import database**. The app reloads in view mode.
 
-A database backup includes all saved response snapshots, optional email addresses, working codes, code revisions, coded excerpts, highlights and reviews, themes and evidence, notes, background settings, and audit history. **Keep these files private. They are not anonymized exports.** Prepare a new export after making further changes.
+A database backup includes all saved response snapshots, optional email addresses, working codes, coded excerpts, highlights and reviews, themes and evidence, their attached analytical notes, and background settings. Standalone notes, change logs, and previous code revisions are excluded from exports and from older backups during import. **Keep these files private. They are not anonymized exports.** Prepare a new export after making further changes.
 
 Import replaces the entire workspace rather than combining databases. Before replacement, the app saves the previous database under `data/backups/before_restore_*.sqlite3`. Import that recovery file through the same controls to return to the earlier workspace. Invalid or incompatible backups are rejected, and replacement runs in a transaction so failed imports leave the current workspace intact. Close other app tabs before importing. Unsaved form entries and local software settings are not part of a database backup.
 

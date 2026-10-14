@@ -8,7 +8,8 @@
 | `forap_analysis/schema.py` | Questionnaire fields, scales, and category options |
 | `forap_analysis/importer.py` | Workbook validation, scoring, and response identifiers |
 | `forap_analysis/statistics.py` | Quantitative summaries and comparisons |
-| `forap_analysis/database.py` | SQLite storage, snapshots, coding, and audit records |
+| `forap_analysis/database.py` | SQLite storage, upload snapshots, and current coding |
+| `forap_analysis/database_history.py` | Compatibility checks and removal of legacy notes and change logs |
 | `forap_analysis/database_transfer.py` | Validated full database backups and atomic restore |
 | `forap_analysis/backup_ui.py` | Backup controls and state reset after restore |
 | `forap_analysis/qualitative.py` | Corpus and qualitative summaries |
